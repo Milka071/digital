@@ -6,7 +6,7 @@ import os
 DB_NAME = os.getenv("DB_NAME", "school_bot.db")
 DATABASE_URL = f"sqlite+aiosqlite:///{DB_NAME}"
 
-engine = create_async_engine(DATABASE_URL, echo=True)
+engine = create_async_engine(DATABASE_URL, echo=False)
 async_session = async_sessionmaker(engine, expire_on_commit=False)
 
 async def init_db():

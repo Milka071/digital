@@ -11,40 +11,54 @@ scheduler = AsyncIOScheduler()
 
 async def check_lessons(bot: Bot):
     """
-    Checks if any lesson has just ended and sends notifications.
-    This runs every minute.
+    Checks for upcoming lessons and homework reminders.
+    This runs every 5 minutes.
     """
     now = datetime.now()
-    current_time_str = now.strftime("%H:%M") # e.g. "09:15"
+    current_time_str = now.strftime("%H:%M") 
     weekday = now.weekday() # 0-6
 
-    # Mock schedule calls logic for MVP
-    # Ideally this is stored in DB per ClassGroup
-    # "09:15" -> End of 1st lesson
-    # "10:10" -> End of 2nd lesson
-    # For demo purposes, we will hardcode or use a simplified check
+    # Simple reminder times - you can customize these
+    REMINDER_TIMES = ["08:00", "12:00", "15:00"]  # Morning, lunch, evening
     
-    # In a real app, we iterate all ClassGroups and check their schedule_config
-    # For this MVP, let's pretend every class ends at X:15
-    
-    # Let's say we want to debug, so we iterate all classes
-    async with async_session() as session:
-        classes = (await session.execute(select(ClassGroup))).scalars().all()
-        
-        for class_group in classes:
-            # Here we need to parse class_group.schedule_calls to see if NOW == end_of_lesson
-            # But since that field is text JSON, let's assume a simplified static map for MVP
+    if current_time_str in REMINDER_TIMES:
+        async with async_session() as session:
+            classes = (await session.execute(select(ClassGroup))).scalars().all()
             
-            # Example logic: Find what lesson is NEXT for this class
-            # We need to know WHICH lesson just ended.
-            
-            # TODO: Implement robust time checking
-            pass
+            for class_group in classes:
+                # Get all users in this class
+                users = (await session.execute(
+                    select(User).where(User.class_group_id == class_group.id)
+                )).scalars().all()
+                
+                if not users:
+                    continue
+                
+                # Send homework reminder
+                homeworks = (await session.execute(
+                    select(Homework).where(
+                        Homework.class_group_id == class_group.id
+                    ).order_by(Homework.date_assigned.desc())
+                )).scalars().all()
+                
+                if homeworks:
+                    hw_text = ["📚 <b>Напоминание о домашних заданиях:</b>\n"]
+                    for hw in homeworks[:3]:  # Limit to 3 recent homeworks
+                        hw_text.append(f"📖 {hw.subject_name}: {hw.content}")
+                    
+                    # Send to all users in the class
+                    for user in users:
+                        try:
+                            await bot.send_message(
+                                user.telegram_id,
+                                "\n".join(hw_text),
+                                parse_mode="HTML"
+                            )
+                        except Exception as e:
+                            logging.error(f"Failed to send reminder to {user.telegram_id}: {e}")
 
-    # Note: Implementing the full time-check logic requires robust data.
-    # We will set up the skeleton.
-    logging.info(f"Tick: {current_time_str}")
+    logging.info(f"Scheduler check: {current_time_str}")
 
 def start_scheduler(bot: Bot):
-    scheduler.add_job(check_lessons, "interval", minutes=1, kwargs={"bot": bot})
+    scheduler.add_job(check_lessons, "interval", minutes=5, kwargs={"bot": bot})
     scheduler.start()

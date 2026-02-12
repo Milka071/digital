@@ -4,7 +4,7 @@ from aiogram.types import Message
 from sqlalchemy import select
 
 from database.setup import async_session
-from database.models import User, Schedule
+from database.models import User, Schedule, ClassGroup
 
 router = Router()
 
@@ -13,6 +13,9 @@ router = Router()
 # Example: /add_schedule 0 1 Algebra
 @router.message(Command("add_schedule"))
 async def add_schedule(message: Message):
+    if not message.text:
+        await message.answer("Ошибка: пустое сообщение")
+        return
     args = message.text.split(maxsplit=3)
     if len(args) < 4:
         await message.answer("Использование: /add_schedule [день 0-6] [урок №] [предмет]")
@@ -62,6 +65,9 @@ async def add_schedule(message: Message):
 @router.message(Command("add_hw"))
 async def add_homework(message: Message):
     # Format: /add_hw [subject] [text]
+    if not message.text:
+        await message.answer("Ошибка: пустое сообщение")
+        return
     args = message.text.split(maxsplit=2)
     if len(args) < 3:
         await message.answer("Использование: /add_hw [предмет] [задание]")
@@ -97,6 +103,10 @@ async def add_homework(message: Message):
 @router.message(Command("hw"))
 async def view_homework(message: Message):
     """View all homework for the user's class"""
+    if not message.from_user:
+        await message.answer("Ошибка: не удалось определить пользователя")
+        return
+        
     async with async_session() as session:
         user = (await session.execute(select(User).where(User.telegram_id == message.from_user.id))).scalar_one_or_none()
         
@@ -123,3 +133,112 @@ async def view_homework(message: Message):
             text.append("")
             
         await message.answer("\n".join(text))
+
+@router.message(Command("create_class"))
+async def create_class(message: Message):
+    """Create a new class"""
+    if not message.text:
+        await message.answer("Ошибка: пустое сообщение")
+        return
+    args = message.text.split(maxsplit=1)
+    if len(args) < 2:
+        await message.answer("Использование: /create_class [название_класса]")
+        return
+    
+    class_name = args[1].strip()
+    
+    async with async_session() as session:
+        # Check if class already exists
+        existing_class = (await session.execute(
+            select(ClassGroup).where(ClassGroup.name == class_name)
+        )).scalar_one_or_none()
+        
+        if existing_class:
+            await message.answer(f"Класс '{class_name}' уже существует.")
+            return
+        
+        # Create new class
+        new_class = ClassGroup(name=class_name)
+        session.add(new_class)
+        await session.commit()
+        await message.answer(f"✅ Класс '{class_name}' создан! Теперь можно присоединиться командой /join_class {class_name}")
+
+@router.message(Command("remove_schedule"))
+async def remove_schedule(message: Message):
+    """Remove a lesson from schedule"""
+    if not message.text:
+        await message.answer("Ошибка: пустое сообщение")
+        return
+    args = message.text.split(maxsplit=2)
+    if len(args) < 3:
+        await message.answer("Использование: /remove_schedule [день 0-6] [урок №]")
+        return
+    
+    try:
+        day = int(args[1])
+        lesson_num = int(args[2])
+    except ValueError:
+        await message.answer("День и номер урока должны быть числами.")
+        return
+
+    async with async_session() as session:
+        user = (await session.execute(select(User).where(User.telegram_id == message.from_user.id))).scalar_one_or_none()
+        
+        if not user or not user.class_group_id:
+            await message.answer("Ты не привязан к классу.")
+            return
+
+        # Find and delete the schedule
+        schedule_item = (await session.execute(
+            select(Schedule).where(
+                Schedule.class_group_id == user.class_group_id,
+                Schedule.day_of_week == day,
+                Schedule.lesson_number == lesson_num
+            )
+        )).scalar_one_or_none()
+
+        if not schedule_item:
+            await message.answer(f"Урок на день {day}, номер {lesson_num} не найден.")
+            return
+
+        await session.delete(schedule_item)
+        await session.commit()
+        await message.answer(f"✅ Урок удален: День {day}, Урок {lesson_num}")
+
+@router.message(Command("remove_hw"))
+async def remove_homework(message: Message):
+    """Remove homework by subject"""
+    if not message.text:
+        await message.answer("Ошибка: пустое сообщение")
+        return
+    args = message.text.split(maxsplit=1)
+    if len(args) < 2:
+        await message.answer("Использование: /remove_hw [предмет]")
+        return
+    
+    subject = args[1]
+
+    async with async_session() as session:
+        user = (await session.execute(select(User).where(User.telegram_id == message.from_user.id))).scalar_one_or_none()
+        
+        if not user or not user.class_group_id:
+            await message.answer("Ты не привязан к классу.")
+            return
+
+        from database.models import Homework
+        
+        # Find and delete homework
+        homework = (await session.execute(
+            select(Homework).where(
+                Homework.class_group_id == user.class_group_id,
+                Homework.subject_name == subject
+            )
+        )).scalar_one_or_none()
+
+        if not homework:
+            await message.answer(f"Домашнее задание по предмету '{subject}' не найдено.")
+            return
+
+        await session.delete(homework)
+        await session.commit()
+        await message.answer(f"✅ Домашнее задание по '{subject}' удалено.")
